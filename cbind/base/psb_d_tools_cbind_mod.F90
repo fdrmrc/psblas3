@@ -380,6 +380,63 @@ contains
     return
   end function psb_c_dgeins_add
 
+  function psb_c_dgeins_v(nz,irw,val,xh,cdh,mode) bind(c) result(res)
+    ! Generic insert: mode=psb_dupl_ovwrt_ (0) overwrites, mode=psb_dupl_add_ (1) accumulates.
+    ! Mirrors PETSc VecSetValues: use PSB_INSERT_VALUES or PSB_ADD_VALUES for mode.
+    ! Do NOT mix modes without an intervening psb_c_dgeasb call.
+    implicit none
+    integer(psb_c_ipk_) :: res
+    integer(psb_c_ipk_), value :: nz
+    integer(psb_c_lpk_)        :: irw(*)
+    real(c_double)             :: val(*)
+    type(psb_c_dvector)        :: xh
+    type(psb_c_descriptor)     :: cdh
+    integer(psb_c_ipk_), value :: mode
+
+    type(psb_desc_type), pointer    :: descp
+    type(psb_d_vect_type), pointer  :: xp
+    integer(psb_c_ipk_)             :: ixb, info
+
+    res = -1
+    info = 0
+    if (c_associated(cdh%item)) then
+      call c_f_pointer(cdh%item,descp)
+    else
+      return
+    end if
+    if (c_associated(xh%item)) then
+      call c_f_pointer(xh%item,xp)
+    else
+      return
+    end if
+
+    ! Reject mode mixing: if entries are already buffered (locally via ncfs, or
+    ! remotely via nrmv) and caller switches mode, that would silently corrupt
+    ! results at assembly time. Return PSB_ERR_MODE_MISMATCH (-2).
+    if ((xp%get_ncfs() > izero .or. xp%get_nrmv() > izero) &
+        & .and. xp%get_dupl() /= mode) then
+      res = -2  ! PSB_ERR_MODE_MISMATCH
+      return
+    end if
+
+    ! Always arm the mode: this is a no-op when dgereinit was called first
+    ! (it already set dupl), but is essential for correctness when dgeins_v
+    ! is called directly after dgeall without a dgereinit.
+    call xp%set_dupl(mode)
+    ixb = psb_c_get_index_base()
+    if (ixb == 1) then
+      call psb_geins(nz,irw(1:nz),val(1:nz),&
+           & xp,descp,info)
+    else
+      call psb_geins(nz,(irw(1:nz)+(1-ixb)),val(1:nz),&
+           & xp,descp,info)
+    end if
+
+    res = min(0,info)
+
+    return
+  end function psb_c_dgeins_v
+
  function psb_c_dspall(mh,cdh) bind(c) result(res)
 
     implicit none

@@ -32,6 +32,9 @@ psb_i_t psb_c_dgeins(psb_i_t nz, const psb_l_t *irw, const psb_d_t *val,
                      psb_c_dvector *xh, psb_c_descriptor *cdh);
 psb_i_t psb_c_dgeins_add(psb_i_t nz, const psb_l_t *irw, const psb_d_t *val,
                          psb_c_dvector *xh, psb_c_descriptor *cdh);
+/* Generic insert with explicit mode: PSB_INSERT_VALUES or PSB_ADD_VALUES */
+psb_i_t psb_c_dgeins_v(psb_i_t nz, const psb_l_t *irw, const psb_d_t *val,
+                       psb_c_dvector *xh, psb_c_descriptor *cdh, psb_i_t mode);
 psb_i_t psb_c_dgeasb(psb_c_dvector *xh, psb_c_descriptor *cdh);
 psb_i_t psb_c_dgeasb_options(psb_c_dvector *xh, psb_c_descriptor *cdh,
                              psb_i_t dupl);
