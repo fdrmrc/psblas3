@@ -201,6 +201,31 @@ contains
   end function psb_c_dvect_set_vect
 
 
+  function psb_c_dvect_reinit(xh, clear) bind(c) result(res)
+    implicit none
+
+    integer(psb_c_ipk_)    :: res
+    type(psb_c_dvector)    :: xh
+    logical(c_bool), value :: clear
+
+    type(psb_d_vect_type), pointer :: vp
+    integer(psb_c_ipk_)            :: info
+    logical                        :: fclear
+
+    res = -1
+
+    if (c_associated(xh%item)) then
+      call c_f_pointer(xh%item, vp)
+    else
+      return
+    end if
+
+    fclear = clear
+    call vp%reinit(info, clear=fclear)
+    res = min(0, info)
+
+  end function psb_c_dvect_reinit
+
   function psb_c_dvect_clone(xh,yh) bind(c) result(info)
     implicit none
 

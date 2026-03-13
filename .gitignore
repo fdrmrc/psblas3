@@ -24,3 +24,7 @@ autom4te.cache
 # the executable from tests
 runs
 
+base/tools/psb_csetelem.f90
+base/tools/psb_dsetelem.f90
+base/tools/psb_ssetelem.f90
+base/tools/psb_zsetelem.f90

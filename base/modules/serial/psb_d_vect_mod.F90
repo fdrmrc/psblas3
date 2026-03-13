@@ -626,6 +626,9 @@ contains
     integer(psb_ipk_), intent(out)      :: info
     logical, intent(in), optional       :: clear
 
+    info = 0
+    ! write(*,*) 'DEBUG: d_vect_reinit called, clear=', &
+    !      & merge(clear, .true., present(clear))
     if (allocated(x%v)) call x%v%reinit(info,clear)
     call x%set_upd()
 
