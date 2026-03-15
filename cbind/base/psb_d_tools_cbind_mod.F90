@@ -381,9 +381,10 @@ contains
   end function psb_c_dgeins_add
 
   function psb_c_dgeins_v(nz,irw,val,xh,cdh,mode) bind(c) result(res)
-    ! Generic insert: mode=psb_dupl_ovwrt_ (0) overwrites, mode=psb_dupl_add_ (1) accumulates.
+    ! Generic insert: mode=psb_dupl_ovwrt_ (2) overwrites, mode=psb_dupl_add_ (1) accumulates.
     ! Mirrors PETSc VecSetValues: use PSB_INSERT_VALUES or PSB_ADD_VALUES for mode.
-    ! Do NOT mix modes without an intervening psb_c_dgeasb call.
+    ! If the vector is in assembled state, auto-reinits (like PETSc stash allocation).
+    ! Do NOT mix modes within one assembly round.
     implicit none
     integer(psb_c_ipk_) :: res
     integer(psb_c_ipk_), value :: nz
@@ -396,6 +397,7 @@ contains
     type(psb_desc_type), pointer    :: descp
     type(psb_d_vect_type), pointer  :: xp
     integer(psb_c_ipk_)             :: ixb, info
+    integer(psb_ipk_)               :: nrmt_
 
     res = -1
     info = 0
@@ -410,6 +412,31 @@ contains
       return
     end if
 
+    ! ── Auto-reinit from assembled state (PETSc-style) ──────────
+    ! If the vector is assembled, automatically transition to an
+    ! insertion state. INSERT → zero + bld, ADD → keep + upd.
+    ! The user can still call dgereinit explicitly before dgeins_v
+    ! to override this (e.g. clear=false + INSERT for patching).
+    if (xp%is_asb()) then
+      if (mode == psb_dupl_ovwrt_) then
+        call xp%zero()
+        call xp%set_bld()
+      else
+        call xp%set_upd()
+      end if
+      call xp%set_dupl(mode)
+      call xp%set_remote_build(psb_matbld_remote_)
+      call xp%set_nrmv(izero)
+      call xp%set_ncfs(izero)
+      nrmt_ = max(100, descp%get_local_cols() - descp%get_local_rows())
+      call psb_ensure_size(nrmt_, xp%rmtv,  info)
+      if (info == 0) call psb_ensure_size(nrmt_, xp%rmidx, info)
+      if (info /= 0) then
+        res = -1
+        return
+      end if
+    end if
+
     ! Reject mode mixing: if entries are already buffered (locally via ncfs, or
     ! remotely via nrmv) and caller switches mode, that would silently corrupt
     ! results at assembly time. Return PSB_ERR_MODE_MISMATCH (-2).
@@ -419,9 +446,9 @@ contains
       return
     end if
 
-    ! Always arm the mode: this is a no-op when dgereinit was called first
-    ! (it already set dupl), but is essential for correctness when dgeins_v
-    ! is called directly after dgeall without a dgereinit.
+    ! Always arm the mode: this is a no-op when auto-reinit or dgereinit
+    ! already set dupl, but is essential for correctness when dgeins_v
+    ! is called directly after dgeall without either.
     call xp%set_dupl(mode)
     ixb = psb_c_get_index_base()
     if (ixb == 1) then

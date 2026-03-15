@@ -586,6 +586,231 @@ int main(int argc, char *argv[]) {
               got);
   }
 
+  // ====================================================================
+  // PETSc-style test: no explicit dgereinit, just dgeins_v + dgeasb
+  // ====================================================================
+  // At this point bh is assembled from the bug-exposure test above.
+  // We exercise three consecutive rounds without ever calling dgereinit:
+  //
+  //   Round 1 (INSERT): auto-reinit from asb → bld, zero+overwrite
+  //     Write 100.0 to vl[0]   → expect 100.0
+  //
+  //   Round 2 (ADD):    auto-reinit from asb → upd, keep+add
+  //     Add 10.0 to vl[0]      → expect 100.0 + 10.0 = 110.0
+  //
+  //   Round 3 (INSERT): auto-reinit from asb → bld, zero+overwrite
+  //     Write 42.0 to vl[0]    → expect 42.0 (not 110+42)
+
+  // Round 1: INSERT (auto zero+bld)
+  {
+    psb_l_t idx = vl[0];
+    double v = 100.0;
+    int rc = psb_c_dgeins_v(1, &idx, &v, bh, cdh, PSB_INSERT_VALUES);
+    if (rc != 0) {
+      fprintf(stderr, "PETSc-style round 1 dgeins_v failed: %d\n", rc);
+      psb_c_abort(*cctxt);
+    }
+  }
+  err = psb_c_dgeasb(bh, cdh);
+  if (err != 0) {
+    fprintf(stderr, "PETSc-style round 1 dgeasb failed: %d\n", err);
+    psb_c_abort(*cctxt);
+  }
+  {
+    double got = psb_c_dgetelem(bh, vl[0], cdh);
+    if (fabs(got - 100.0) > 1e-12) {
+      fprintf(
+          stderr,
+          "Process %d PETSc-style round 1 FAILED: got %.1f, expected 100.0\n",
+          iam, got);
+      psb_c_abort(*cctxt);
+    }
+    if (iam == 0)
+      fprintf(stdout, "PETSc-style round 1 (INSERT) OK: got %.1f\n", got);
+  }
+
+  // Round 2: ADD (auto keep+upd)
+  {
+    psb_l_t idx = vl[0];
+    double v = 10.0;
+    int rc = psb_c_dgeins_v(1, &idx, &v, bh, cdh, PSB_ADD_VALUES);
+    if (rc != 0) {
+      fprintf(stderr, "PETSc-style round 2 dgeins_v failed: %d\n", rc);
+      psb_c_abort(*cctxt);
+    }
+  }
+  err = psb_c_dgeasb(bh, cdh);
+  if (err != 0) {
+    fprintf(stderr, "PETSc-style round 2 dgeasb failed: %d\n", err);
+    psb_c_abort(*cctxt);
+  }
+  {
+    double got = psb_c_dgetelem(bh, vl[0], cdh);
+    if (fabs(got - 110.0) > 1e-12) {
+      fprintf(
+          stderr,
+          "Process %d PETSc-style round 2 FAILED: got %.1f, expected 110.0\n",
+          iam, got);
+      psb_c_abort(*cctxt);
+    }
+    if (iam == 0)
+      fprintf(stdout, "PETSc-style round 2 (ADD) OK: got %.1f\n", got);
+  }
+
+  // Round 3: INSERT again (auto zero+bld, should discard 110)
+  {
+    psb_l_t idx = vl[0];
+    double v = 42.0;
+    int rc = psb_c_dgeins_v(1, &idx, &v, bh, cdh, PSB_INSERT_VALUES);
+    if (rc != 0) {
+      fprintf(stderr, "PETSc-style round 3 dgeins_v failed: %d\n", rc);
+      psb_c_abort(*cctxt);
+    }
+  }
+  err = psb_c_dgeasb(bh, cdh);
+  if (err != 0) {
+    fprintf(stderr, "PETSc-style round 3 dgeasb failed: %d\n", err);
+    psb_c_abort(*cctxt);
+  }
+  {
+    double got = psb_c_dgetelem(bh, vl[0], cdh);
+    if (fabs(got - 42.0) > 1e-12) {
+      fprintf(
+          stderr,
+          "Process %d PETSc-style round 3 FAILED: got %.1f, expected 42.0\n",
+          iam, got);
+      psb_c_abort(*cctxt);
+    }
+    if (iam == 0)
+      fprintf(stdout, "PETSc-style round 3 (INSERT after ADD) OK: got %.1f\n",
+              got);
+  }
+
+  if (iam == 0)
+    fprintf(stdout, "All PETSc-style local auto-reinit tests PASSED\n");
+
+  // ====================================================================
+  // PETSc-style remote test: no explicit dgereinit, just dgeins_v + dgeasb
+  // ====================================================================
+  // Same idea as the local PETSc-style tests above, but each process
+  // inserts into indices owned by the *next* process (remote insertion).
+  // The auto-reinit inside dgeins_v must also reset the remote buffers.
+  if (np > 1) {
+    psb_i_t next = (iam + 1) % np;
+    psb_l_t rnb = (ng + np - 1) / np;
+    psb_l_t ridx[2];
+    ridx[0] = (psb_l_t)next * rnb;
+    ridx[1] = (psb_l_t)next * rnb + 1;
+    psb_l_t sent0 = (psb_l_t)iam * rnb;
+    psb_l_t sent1 = (psb_l_t)iam * rnb + 1;
+
+    // Round 4 (INSERT, remote): auto-reinit from asb → bld, zero+overwrite.
+    // Each process writes 500.0 and 600.0 to the next process's indices.
+    if (ridx[1] < ng) {
+      double rval[2] = {500.0, 600.0};
+      int rc = psb_c_dgeins_v(2, ridx, rval, bh, cdh, PSB_INSERT_VALUES);
+      if (rc != 0) {
+        fprintf(stderr, "Process %d PETSc-remote round 4 dgeins_v failed: %d\n",
+                iam, rc);
+        psb_c_abort(*cctxt);
+      }
+    }
+    err = psb_c_dgeasb(bh, cdh);
+    if (err != 0) {
+      fprintf(stderr, "PETSc-remote round 4 dgeasb failed: %d\n", err);
+      psb_c_abort(*cctxt);
+    }
+    if (sent1 < ng) {
+      double g0 = psb_c_dgetelem(bh, sent0, cdh);
+      double g1 = psb_c_dgetelem(bh, sent1, cdh);
+      if (fabs(g0 - 500.0) > 1e-12 || fabs(g1 - 600.0) > 1e-12) {
+        fprintf(stderr,
+                "Process %d PETSc-remote round 4 FAILED: "
+                "idx %ld=%.1f (exp 500.0), idx %ld=%.1f (exp 600.0)\n",
+                iam, sent0, g0, sent1, g1);
+        psb_c_abort(*cctxt);
+      }
+      if (iam == 0)
+        fprintf(
+            stdout,
+            "PETSc-remote round 4 (INSERT) OK: idx %ld=%.1f, idx %ld=%.1f\n",
+            sent0, g0, sent1, g1);
+    }
+
+    // Round 5 (ADD, remote): auto-reinit from asb → upd, keep+add.
+    // Each process adds 25.0 and 35.0 to the next process's indices.
+    // Expected: 500+25=525, 600+35=635.
+    if (ridx[1] < ng) {
+      double rval[2] = {25.0, 35.0};
+      int rc = psb_c_dgeins_v(2, ridx, rval, bh, cdh, PSB_ADD_VALUES);
+      if (rc != 0) {
+        fprintf(stderr, "Process %d PETSc-remote round 5 dgeins_v failed: %d\n",
+                iam, rc);
+        psb_c_abort(*cctxt);
+      }
+    }
+    err = psb_c_dgeasb(bh, cdh);
+    if (err != 0) {
+      fprintf(stderr, "PETSc-remote round 5 dgeasb failed: %d\n", err);
+      psb_c_abort(*cctxt);
+    }
+    if (sent1 < ng) {
+      double g0 = psb_c_dgetelem(bh, sent0, cdh);
+      double g1 = psb_c_dgetelem(bh, sent1, cdh);
+      if (fabs(g0 - 525.0) > 1e-12 || fabs(g1 - 635.0) > 1e-12) {
+        fprintf(stderr,
+                "Process %d PETSc-remote round 5 FAILED: "
+                "idx %ld=%.1f (exp 525.0), idx %ld=%.1f (exp 635.0)\n",
+                iam, sent0, g0, sent1, g1);
+        psb_c_abort(*cctxt);
+      }
+      if (iam == 0)
+        fprintf(stdout,
+                "PETSc-remote round 5 (ADD) OK: idx %ld=%.1f, idx %ld=%.1f\n",
+                sent0, g0, sent1, g1);
+    }
+
+    // Round 6 (INSERT again, remote): auto-reinit from asb → bld, zero.
+    // Each process writes 99.0 to the next process's indices.
+    // Expected: 99.0 (not 525+99 — the zero must have wiped old values).
+    if (ridx[1] < ng) {
+      double rval[2] = {99.0, 99.0};
+      int rc = psb_c_dgeins_v(2, ridx, rval, bh, cdh, PSB_INSERT_VALUES);
+      if (rc != 0) {
+        fprintf(stderr, "Process %d PETSc-remote round 6 dgeins_v failed: %d\n",
+                iam, rc);
+        psb_c_abort(*cctxt);
+      }
+    }
+    err = psb_c_dgeasb(bh, cdh);
+    if (err != 0) {
+      fprintf(stderr, "PETSc-remote round 6 dgeasb failed: %d\n", err);
+      psb_c_abort(*cctxt);
+    }
+    if (sent1 < ng) {
+      double g0 = psb_c_dgetelem(bh, sent0, cdh);
+      double g1 = psb_c_dgetelem(bh, sent1, cdh);
+      if (fabs(g0 - 99.0) > 1e-12 || fabs(g1 - 99.0) > 1e-12) {
+        fprintf(stderr,
+                "Process %d PETSc-remote round 6 FAILED: "
+                "idx %ld=%.1f (exp 99.0), idx %ld=%.1f (exp 99.0)\n",
+                iam, sent0, g0, sent1, g1);
+        psb_c_abort(*cctxt);
+      }
+      if (iam == 0)
+        fprintf(stdout,
+                "PETSc-remote round 6 (INSERT after ADD) OK: "
+                "idx %ld=%.1f, idx %ld=%.1f\n",
+                sent0, g0, sent1, g1);
+    }
+
+    if (iam == 0)
+      fprintf(stdout, "All PETSc-style remote auto-reinit tests PASSED\n");
+  } else {
+    if (iam == 0)
+      fprintf(stdout, "Skipping PETSc-style remote tests (single process)\n");
+  }
+
   // cleanup
   if ((info = psb_c_dgefree(bh, cdh)) != 0) {
     fprintf(stderr, "From dgefree(b): %d\n", info);
